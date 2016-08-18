@@ -81,6 +81,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean batterySaver = false;
 
     private boolean readyForNewScreenshot = true;
+    private ScreenScanner scanner;
 
     private String pokemonName;
     private double estimatedPokemonLevel;
@@ -89,10 +90,6 @@ public class MainActivity extends AppCompatActivity {
     private boolean pokeFlyRunning = false;
     private int trainerLevel;
 
-    private int areaX1;
-    private int areaY1;
-    private int areaX2;
-    private int areaY2;
     private int statusBarHeight;
     private int arcCenter;
     private int arcInitialY;
@@ -217,10 +214,7 @@ public class MainActivity extends AppCompatActivity {
         Display disp = windowManager.getDefaultDisplay();
         disp.getRealMetrics(rawDisplayMetrics);
 
-        areaX1 = Math.round(displayMetrics.widthPixels / 24);  // these values used to get "white" left of "power up"
-        areaY1 = (int) Math.round(displayMetrics.heightPixels / 1.24271845);
-        areaX2 = (int) Math.round(displayMetrics.widthPixels / 1.15942029);  // these values used to get greenish color in transfer button
-        areaY2 = (int) Math.round(displayMetrics.heightPixels / 1.11062907);
+        scanner = new ScreenScanner(displayMetrics);
 
         LocalBroadcastManager.getInstance(this).registerReceiver(resetScreenshot, new IntentFilter("reset-screenshot"));
         LocalBroadcastManager.getInstance(this).registerReceiver(takeScreenshot, new IntentFilter("screenshot"));
@@ -523,27 +517,16 @@ public class MainActivity extends AppCompatActivity {
      * If both exist then the user is on the pokemon screen.
      */
     private void scanPokemonScreen() {
-        //System.out.println("Checking...");
-        Image image = mImageReader.acquireLatestImage();
-        if (image != null) {
-            final Image.Plane[] planes = image.getPlanes();
-            final ByteBuffer buffer = planes[0].getBuffer();
-            int pixelStride = planes[0].getPixelStride();
-            int rowStride = planes[0].getRowStride();
-            int rowPadding = rowStride - pixelStride * rawDisplayMetrics.widthPixels;
-            // create bitmap
-            image.close();
-            Bitmap bmp = getBitmap(buffer, pixelStride, rowPadding);
-            Intent showIVButton = new Intent("display-ivButton");
-            if (bmp.getPixel(areaX1, areaY1) == Color.rgb(250, 250, 250) && bmp.getPixel(areaX2, areaY2) == Color.rgb(28, 135, 150)) {
+        Intent showIVButton = new Intent("display-ivButton");
+
+        switch (scanner.scan(mImageReader.acquireLatestImage(), rawDisplayMetrics.widthPixels)) {
+            case ScreenScanner.POKEMON_SCREEN:
                 showIVButton.putExtra("show", true);
-            } else {
+            case ScreenScanner.UNKNOWN_SCREEN:
                 showIVButton.putExtra("show", false);
-            }
-            bmp.recycle();
-            LocalBroadcastManager.getInstance(MainActivity.this).sendBroadcast(showIVButton);
-            //SaveImage(bmp,"everything");
         }
+
+        LocalBroadcastManager.getInstance(MainActivity.this).sendBroadcast(showIVButton);
     }
 
     @NonNull
