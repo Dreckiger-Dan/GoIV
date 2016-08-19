@@ -69,24 +69,16 @@ public class MainActivity extends AppCompatActivity {
     private static final int WRITE_STORAGE_REQ_CODE = 1236;
     private static final int SCREEN_CAPTURE_REQ_CODE = 1235;
 
-    private MediaProjection mProjection;
-    private ImageReader mImageReader;
     private ContentObserver screenShotObserver;
     private boolean screenShotWriting= false;
 
     private DisplayMetrics displayMetrics;
     private DisplayMetrics rawDisplayMetrics;
-    private TessBaseAPI tesseract;
-    private boolean tessInitiated = false;
     private boolean batterySaver = false;
 
     private boolean readyForNewScreenshot = true;
     private ScreenScanner scanner;
 
-    private String pokemonName;
-    private double estimatedPokemonLevel;
-    private int pokemonCP;
-    private int pokemonHP;
     private boolean pokeFlyRunning = false;
     private int trainerLevel;
 
@@ -123,7 +115,6 @@ public class MainActivity extends AppCompatActivity {
         final EditText etTrainerLevel = (EditText) findViewById(R.id.trainerLevel);
         etTrainerLevel.setText(String.valueOf(trainerLevel));
 
-        initTesseract();
         final CheckBox CheckBox_BatterySaver = (CheckBox) findViewById(R.id.checkbox_batterySaver);
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.KITKAT) {
             CheckBox_BatterySaver.setChecked(true);
@@ -191,11 +182,7 @@ public class MainActivity extends AppCompatActivity {
                     }
                 } else {
                     stopService(new Intent(MainActivity.this, pokefly.class));
-                    if (mProjection != null) {
-                        mProjection.stop();
-                        mProjection = null;
-                        mImageReader = null;
-                    } else if (screenShotObserver != null) {
+                    if (screenShotObserver != null) {
                         getContentResolver().unregisterContentObserver(screenShotObserver);
                         screenShotObserver = null;
                     }
@@ -214,7 +201,7 @@ public class MainActivity extends AppCompatActivity {
         Display disp = windowManager.getDefaultDisplay();
         disp.getRealMetrics(rawDisplayMetrics);
 
-        scanner = new ScreenScanner(displayMetrics);
+        scanner = new ScreenScanner(displayMetrics, trainerLevel);
 
         LocalBroadcastManager.getInstance(this).registerReceiver(resetScreenshot, new IntentFilter("reset-screenshot"));
         LocalBroadcastManager.getInstance(this).registerReceiver(takeScreenshot, new IntentFilter("screenshot"));
@@ -258,6 +245,10 @@ public class MainActivity extends AppCompatActivity {
         PokeFly.putExtra("batterySaver", batterySaver);
         startService(PokeFly);
 
+        Intent screenScanner = new Intent(MainActivity.this, ScreenScanner.class);
+        screenScanner.putExtra("trainerLevel", trainerLevel);
+        startService(screenScanner);
+
         pokeFlyRunning = true;
 
         openPokemonGoApp();
@@ -281,17 +272,6 @@ public class MainActivity extends AppCompatActivity {
             Log.e(TAG, "Error while getting version name", e);
         }
         return "Error while getting version name";
-    }
-
-    private void initTesseract() {
-        if (!new File(getExternalFilesDir(null) + "/tessdata/eng.traineddata").exists()) {
-            copyAssetFolder(getAssets(), "tessdata", getExternalFilesDir(null) + "/tessdata");
-        }
-
-        tesseract = new TessBaseAPI();
-        tesseract.init(getExternalFilesDir(null) + "", "eng");
-        tesseract.setVariable(TessBaseAPI.VAR_CHAR_WHITELIST, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/♀♂");
-        tessInitiated = true;
     }
 
     /**
@@ -327,8 +307,7 @@ public class MainActivity extends AppCompatActivity {
         else if(screenShotObserver != null){
             getContentResolver().unregisterContentObserver(screenShotObserver);
         }
-        tesseract.stop();
-        tesseract.end();
+
         mProjection = null;
         mImageReader = null;
 
@@ -402,114 +381,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /**
-     * takeScreenshot
-     * Called by intent from pokefly, captures the screen and runs it through scanPokemon
-     */
-    private void takeScreenshot() {
-        Image image = null;
-        try {
-            image = mImageReader.acquireLatestImage();
-        } catch (Exception e) {
-            Crashlytics.log("Error thrown in takeScreenshot() - acquireLatestImage()");
-            Crashlytics.logException(e);
-            Log.e(TAG, "Error while Scanning!", e);
-            Toast.makeText(MainActivity.this, "Error Scanning! Please try again later!", Toast.LENGTH_SHORT).show();
-        }
 
-        if (image != null) {
-            final Image.Plane[] planes = image.getPlanes();
-            final ByteBuffer buffer = planes[0].getBuffer();
-            int offset = 0;
-            int pixelStride = planes[0].getPixelStride();
-            int rowStride = planes[0].getRowStride();
-            int rowPadding = rowStride - pixelStride * displayMetrics.widthPixels;
-            // create bitmap
-            try {
-                image.close();
-                Bitmap bmp = getBitmap(buffer, pixelStride, rowPadding);
-                scanPokemon(bmp);
-                //SaveImage(bmp,"Search");
-            } catch (Exception e) {
-                Crashlytics.log("Exception thrown in takeScreenshot() - when creating bitmap");
-                Crashlytics.logException(e);
-                image.close();
-            }
-
-
-        }
-    }
-
-    /**
-     * scanPokemon
-     * Performs OCR on an image of a pokemon and sends the pulled info to PokeFly to display.
-     *
-     * @param pokemonImage The image of the pokemon
-     */
-    private void scanPokemon(Bitmap pokemonImage) {
-        estimatedPokemonLevel = trainerLevel + 1.5;
-
-        for (double estPokemonLevel = estimatedPokemonLevel; estPokemonLevel >= 1.0; estPokemonLevel -= 0.5) {
-            //double angleInDegrees = (Data.CpM[(int) (estPokemonLevel * 2 - 2)] - 0.094) * 202.037116 / Data.CpM[trainerLevel * 2 - 2];
-            //if (angleInDegrees > 1.0 && trainerLevel < 30) {
-              //  angleInDegrees -= 0.5;
-            //} else if (trainerLevel >= 30) {
-             //   angleInDegrees += 0.5;
-            //}
-
-            //double angleInRadians = (angleInDegrees + 180) * Math.PI / 180.0;
-            //int x = (int) (arcCenter + (radius * Math.cos(angleInRadians)));
-            //int y = (int) (arcInitialY + (radius * Math.sin(angleInRadians)));
-            //System.out.println("X: " + x + ", Y: " + y);
-            int index = Data.convertLevelToIndex(estPokemonLevel);
-            int x = Data.arcX[index];
-            int y = Data.arcY[index];
-            if (pokemonImage.getPixel(x, y) == Color.rgb(255, 255, 255)) {
-                estimatedPokemonLevel = estPokemonLevel;
-                break;
-            }
-        }
-
-        Bitmap name = Bitmap.createBitmap(pokemonImage, displayMetrics.widthPixels / 4, (int) Math.round(displayMetrics.heightPixels / 2.22608696), (int) Math.round(displayMetrics.widthPixels / 2.057), (int) Math.round(displayMetrics.heightPixels / 18.2857143));
-        name = replaceColors(name, 68, 105, 108, Color.WHITE, 200);
-        tesseract.setImage(name);
-        //System.out.println(tesseract.getUTF8Text());
-        pokemonName = tesseract.getUTF8Text().replace(" ", "").replace("1", "l").replace("0", "o").replace("Sparky", getString(R.string.pokemon133)).replace("Rainer", getString(R.string.pokemon133)).replace("Pyro", getString(R.string.pokemon133));
-        //SaveImage(name, "name");
-        Bitmap hp = Bitmap.createBitmap(pokemonImage, (int) Math.round(displayMetrics.widthPixels / 2.8), (int) Math.round(displayMetrics.heightPixels / 1.8962963), (int) Math.round(displayMetrics.widthPixels / 3.5), (int) Math.round(displayMetrics.heightPixels / 34.13333333));
-        hp = replaceColors(hp, 55, 66, 61, Color.WHITE, 200);
-        tesseract.setImage(hp);
-        //System.out.println(tesseract.getUTF8Text());
-        pokemonHP = Integer.parseInt(tesseract.getUTF8Text().split("/")[1].replace("Z", "2").replace("O", "0").replace("l", "1").replaceAll("[^0-9]", ""));
-        //SaveImage(hp, "hp");
-        Bitmap cp = Bitmap.createBitmap(pokemonImage, (int) Math.round(displayMetrics.widthPixels / 3.0), (int) Math.round(displayMetrics.heightPixels / 15.5151515), (int) Math.round(displayMetrics.widthPixels / 3.84), (int) Math.round(displayMetrics.heightPixels / 21.333333333));
-        cp = replaceColors(cp, 255, 255, 255, Color.BLACK, 1);
-        tesseract.setImage(cp);
-        String cpText = tesseract.getUTF8Text().replace("O", "0").replace("l", "1").replace("S", "3").replaceAll("[^0-9]", "");
-        if (cpText.length() > 4) {
-            cpText = cpText.substring(cpText.length() - 4, cpText.length() - 1);
-        }
-        //System.out.println(cpText);
-        pokemonCP = Integer.parseInt(cpText);
-        if (pokemonCP > 4500) {
-            cpText = cpText.substring(1);
-            pokemonCP = Integer.parseInt(cpText);
-        }
-        //SaveImage(cp, "cp");
-        //System.out.println("Name: " + pokemonName);
-        //System.out.println("HP: " + pokemonHP);
-        //System.out.println("CP: " + pokemonCP);
-        name.recycle();
-        cp.recycle();
-        hp.recycle();
-
-        Intent info = new Intent("pokemon-info");
-        info.putExtra("name", pokemonName);
-        info.putExtra("hp", pokemonHP);
-        info.putExtra("cp", pokemonCP);
-        info.putExtra("level", estimatedPokemonLevel);
-        LocalBroadcastManager.getInstance(MainActivity.this).sendBroadcast(info);
-    }
 
     /**
      * scanPokemonScreen
@@ -609,7 +481,7 @@ public class MainActivity extends AppCompatActivity {
                                 readyForNewScreenshot = false;
                                 //TODO change scanPokemon to check to see if image is a pokemon instead of crashing
                                 try {
-                                    scanPokemon(BitmapFactory.decodeFile(pathChange));
+                                    scanner.scanPokemon(BitmapFactory.decodeFile(pathChange));
                                     getContentResolver().delete(fUri, MediaStore.Files.FileColumns.DATA + "=?", new String[]{pathChange});
                                 } catch (ArrayIndexOutOfBoundsException e) {
                                     //HP was not detected so just ignore
@@ -650,7 +522,7 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (readyForNewScreenshot) {
-                takeScreenshot();
+                scanner.takeScreenshot();
                 readyForNewScreenshot = false;
             }
         }
@@ -667,84 +539,5 @@ public class MainActivity extends AppCompatActivity {
             readyForNewScreenshot = true;
         }
     };
-
-    /**
-     * replaceColors
-     * Replaces colors in a bitmap that are not the same as a specific color.
-     *
-     * @param myBitmap     The bitmap to check the colors for.
-     * @param keepCr       The red color to keep
-     * @param keepCg       The green color to keep
-     * @param keepCb       The blue color to keep
-     * @param replaceColor The color to replace mismatched colors with
-     * @param similarity   The similarity buffer
-     * @return Bitmap with replaced colors
-     */
-    private Bitmap replaceColors(Bitmap myBitmap, int keepCr, int keepCg, int keepCb, int replaceColor, int similarity) {
-        int[] allpixels = new int[myBitmap.getHeight() * myBitmap.getWidth()];
-        myBitmap.getPixels(allpixels, 0, myBitmap.getWidth(), 0, 0, myBitmap.getWidth(), myBitmap.getHeight());
-
-        for (int i = 0; i < allpixels.length; i++) {
-            int r = Color.red(allpixels[i]);
-            int g = Color.green(allpixels[i]);
-            int b = Color.blue(allpixels[i]);
-            double d = Math.sqrt(Math.pow(keepCr - r, 2) + Math.pow(keepCg - g, 2) + Math.pow(keepCb - b, 2));
-            if (d > similarity) {
-                allpixels[i] = replaceColor;
-            }
-        }
-
-        myBitmap.setPixels(allpixels, 0, myBitmap.getWidth(), 0, 0, myBitmap.getWidth(), myBitmap.getHeight());
-        return myBitmap;
-    }
-
-    private static boolean copyAssetFolder(AssetManager assetManager, String fromAssetPath, String toPath) {
-
-        String[] files = new String[0];
-
-        try {
-            files = assetManager.list(fromAssetPath);
-        } catch (IOException e) {
-            Crashlytics.log("Exception thrown in copyAssetFolder()");
-            Crashlytics.logException(e);
-            Log.e(TAG, "Error while loading filenames.", e);
-        }
-        new File(toPath).mkdirs();
-        boolean res = true;
-        for (String file : files)
-            if (file.contains(".")) {
-                res &= copyAsset(assetManager, fromAssetPath + "/" + file, toPath + "/" + file);
-            } else {
-                res &= copyAssetFolder(assetManager, fromAssetPath + "/" + file, toPath + "/" + file);
-            }
-        return res;
-
-    }
-
-    private static boolean copyAsset(AssetManager assetManager, String fromAssetPath, String toPath) {
-        try {
-            InputStream in = assetManager.open(fromAssetPath);
-            new File(toPath).createNewFile();
-            OutputStream out = new FileOutputStream(toPath);
-            copyFile(in, out);
-            in.close();
-            out.flush();
-            out.close();
-            return true;
-        } catch (IOException e) {
-            Crashlytics.log("Exception thrown in copyAsset()");
-            Crashlytics.logException(e);
-            Log.e(TAG, "Error while copying assets.", e);
-            return false;
-        }
-    }
-
-    private static void copyFile(InputStream in, OutputStream out) throws IOException {
-        byte[] buffer = new byte[1024];
-        int read;
-        while ((read = in.read(buffer)) != -1) {
-            out.write(buffer, 0, read);
-        }
-    }
 
 }
