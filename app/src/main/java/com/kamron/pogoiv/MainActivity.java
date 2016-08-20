@@ -25,12 +25,10 @@ import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
 import android.os.FileObserver;
 import android.os.Handler;
 import android.provider.MediaStore;
 import android.provider.Settings;
-import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v4.content.LocalBroadcastManager;
@@ -51,7 +49,6 @@ import android.widget.Toast;
 
 import com.crashlytics.android.Crashlytics;
 import com.crashlytics.android.core.CrashlyticsCore;
-import com.googlecode.tesseract.android.TessBaseAPI;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -62,7 +59,6 @@ import java.nio.ByteBuffer;
 import java.util.Locale;
 import java.util.Timer;
 import java.util.TimerTask;
-import java.util.stream.IntStream;
 
 import io.fabric.sdk.android.Fabric;
 
@@ -84,27 +80,25 @@ public class MainActivity extends AppCompatActivity {
 
     private DisplayMetrics displayMetrics;
     private DisplayMetrics rawDisplayMetrics;
-    private TessBaseAPI tesseract;
-    private boolean tessInitiated = false;
     private boolean batterySaver = false;
     private String screenshotDir;
     private Uri screenshotUri;
+    private BmpHelper bmpHelper;
 
     private boolean readyForNewScreenshot = true;
 
-    private String pokemonName;
-    private String candyName;
-    private int candyOrder = 0;
-    private double estimatedPokemonLevel;
-    private int pokemonCP;
-    private int pokemonHP;
     private boolean pokeFlyRunning = false;
     private int trainerLevel;
 
-    private int areaX1;
-    private int areaY1;
-    private int areaX2;
-    private int areaY2;
+    private int pokemonAreaX1;
+    private int pokemonAreaY1;
+    private int pokemonAreaX2;
+    private int pokemonAreaY2;
+    private int gymAreaX1;
+    private int gymAreaY1;
+    private int gymAreaX2;
+    private int gymAreaY2;
+
     private int statusBarHeight;
     private int arcCenter;
     private int arcInitialY;
@@ -140,7 +134,11 @@ public class MainActivity extends AppCompatActivity {
         final EditText etTrainerLevel = (EditText) findViewById(R.id.trainerLevel);
         etTrainerLevel.setText(String.valueOf(trainerLevel));
 
-        initTesseract();
+        if (!new File(getExternalFilesDir(null) + "/tessdata/eng.traineddata").exists()) {
+            copyAssetFolder(getAssets(), "tessdata", getExternalFilesDir(null) + "/tessdata");
+        }
+        bmpHelper = new BmpHelper(getExternalFilesDir(null) + "");
+
         final CheckBox CheckBox_BatterySaver = (CheckBox) findViewById(R.id.checkbox_batterySaver);
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.KITKAT) {
             CheckBox_BatterySaver.setChecked(true);
@@ -236,14 +234,19 @@ public class MainActivity extends AppCompatActivity {
         Display disp = windowManager.getDefaultDisplay();
         disp.getRealMetrics(rawDisplayMetrics);
 
-        areaX1 = Math.round(displayMetrics.widthPixels / 24);  // these values used to get "white" left of "power up"
-        areaY1 = (int) Math.round(displayMetrics.heightPixels / 1.24271845);
-        areaX2 = (int) Math.round(displayMetrics.widthPixels / 1.15942029);  // these values used to get greenish color in transfer button
-        areaY2 = (int) Math.round(displayMetrics.heightPixels / 1.11062907);
+        pokemonAreaX1 = Math.round(displayMetrics.widthPixels / 24);  // these values used to get "white" left of "power up"
+        pokemonAreaY1 = (int) Math.round(displayMetrics.heightPixels / 1.24271845);
+        pokemonAreaX2 = (int) Math.round(displayMetrics.widthPixels / 1.15942029);  // these values used to get greenish color in transfer button
+        pokemonAreaY2 = (int) Math.round(displayMetrics.heightPixels / 1.11062907);
+
+        gymAreaX1 = 0;
+        gymAreaY1 = 0;
+//        gymAreaX2;
+//        gymAreaY2;
 
         //Check if language makes the pokemon name in candy second e.g. France is Bonbon pokeName
         if(Locale.getDefault().getLanguage().equals("fr")){
-            candyOrder = 1;
+            bmpHelper.candyOrder = 1;
         }
 
         LocalBroadcastManager.getInstance(this).registerReceiver(resetScreenshot, new IntentFilter("reset-screenshot"));
@@ -363,17 +366,6 @@ public class MainActivity extends AppCompatActivity {
         return "Error while getting version name";
     }
 
-    private void initTesseract() {
-        if (!new File(getExternalFilesDir(null) + "/tessdata/eng.traineddata").exists()) {
-            copyAssetFolder(getAssets(), "tessdata", getExternalFilesDir(null) + "/tessdata");
-        }
-
-        tesseract = new TessBaseAPI();
-        tesseract.init(getExternalFilesDir(null) + "", "eng");
-        tesseract.setVariable(TessBaseAPI.VAR_CHAR_WHITELIST, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/♀♂");
-        tessInitiated = true;
-    }
-
     /**
      * checkPermissions
      * Checks to see if all runtime permissions are granted,
@@ -406,15 +398,14 @@ public class MainActivity extends AppCompatActivity {
                 mProjection.stop();
             }
         }
-        if(screenShotObserver != null){
+        if (screenShotObserver != null) {
             getContentResolver().unregisterContentObserver(screenShotObserver);
         }
-        if(screenShotScanner != null){
+        if (screenShotScanner != null) {
             screenShotScanner.stopWatching();
             screenShotScanner = null;
         }
-        tesseract.stop();
-        tesseract.end();
+        bmpHelper.destroy();
         mProjection = null;
         mImageReader = null;
 
@@ -513,8 +504,8 @@ public class MainActivity extends AppCompatActivity {
             // create bitmap
             try {
                 image.close();
-                Bitmap bmp = getBitmap(buffer, pixelStride, rowPadding);
-                scanPokemon(bmp,"");
+                Bitmap bmp = bmpHelper.getBitmap(buffer, pixelStride, rowPadding, rawDisplayMetrics.widthPixels, displayMetrics.heightPixels);
+                scanPokemon(bmp, "");
                 //SaveImage(bmp,"Search");
             } catch (Exception e) {
                 Crashlytics.log("Exception thrown in takeScreenshot() - when creating bitmap");
@@ -526,157 +517,36 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /**
-     * scanPokemon
-     * Performs OCR on an image of a pokemon and sends the pulled info to PokeFly to display.
-     *
-     * @param pokemonImage The image of the pokemon
-     * @param filePath The screenshot path if it is a file, used to delete once checked
-     */
     private void scanPokemon(Bitmap pokemonImage, String filePath) {
-        estimatedPokemonLevel = trainerLevel + 1.5;
+        BmpHelper.ScanResult scanResult =
+                bmpHelper.scanPokemon(
+                        pokemonImage, filePath, trainerLevel, displayMetrics.widthPixels, displayMetrics.heightPixels);
 
-        for (double estPokemonLevel = estimatedPokemonLevel; estPokemonLevel >= 1.0; estPokemonLevel -= 0.5) {
-            //double angleInDegrees = (Data.CpM[(int) (estPokemonLevel * 2 - 2)] - 0.094) * 202.037116 / Data.CpM[trainerLevel * 2 - 2];
-            //if (angleInDegrees > 1.0 && trainerLevel < 30) {
-              //  angleInDegrees -= 0.5;
-            //} else if (trainerLevel >= 30) {
-             //   angleInDegrees += 0.5;
-            //}
+        if (scanResult == null) {
+            readyForNewScreenshot = true;
+        } else {
+            scanResult.pokemonName = scanResult.pokemonName.replace("Sparky", getString(R.string.pokemon133)).replace("Rainer", getString(R.string.pokemon133)).replace("Pyro", getString(R.string.pokemon133));
 
-            //double angleInRadians = (angleInDegrees + 180) * Math.PI / 180.0;
-            //int x = (int) (arcCenter + (radius * Math.cos(angleInRadians)));
-            //int y = (int) (arcInitialY + (radius * Math.sin(angleInRadians)));
-            //System.out.println("X: " + x + ", Y: " + y);
-            int index = Data.convertLevelToIndex(estPokemonLevel);
-            int x = Data.arcX[index];
-            int y = Data.arcY[index];
-            if (pokemonImage.getPixel(x, y) == Color.rgb(255, 255, 255)) {
-                estimatedPokemonLevel = estPokemonLevel;
-                break;
+            if (scanResult.pokemonName.toLowerCase().contains("nidora")) {
+                if(bmpHelper.isNidoranFemale(pokemonImage, displayMetrics.widthPixels, displayMetrics.heightPixels)) {
+                    scanResult.pokemonName = getResources().getString(R.string.pokemon029);
+                } else {
+                    scanResult.pokemonName = getResources().getString(R.string.pokemon032);
+                }
             }
-        }
-
-        Bitmap name = Bitmap.createBitmap(pokemonImage, displayMetrics.widthPixels / 4, (int) Math.round(displayMetrics.heightPixels / 2.22608696), (int) Math.round(displayMetrics.widthPixels / 2.057), (int) Math.round(displayMetrics.heightPixels / 18.2857143));
-        name = replaceColors(name, 68, 105, 108, Color.WHITE, 200);
-        tesseract.setImage(name);
-        //System.out.println(tesseract.getUTF8Text());
-        pokemonName = tesseract.getUTF8Text().replace(" ", "").replace("1", "l").replace("0", "o").replace("Sparky", getString(R.string.pokemon133)).replace("Rainer", getString(R.string.pokemon133)).replace("Pyro", getString(R.string.pokemon133));
-
-        if (pokemonName.toLowerCase().contains("nidora")){
-            boolean isFemale = isNidoranFemale(pokemonImage);
-            if(isFemale){
-                pokemonName = getResources().getString(R.string.pokemon029);
-            }else{
-                pokemonName = getResources().getString(R.string.pokemon032);
-            }
-        }
-        //SaveImage(name, "name");
-        // TODO : Check rectangle and color
-        Bitmap candy = Bitmap.createBitmap(pokemonImage, displayMetrics.widthPixels / 2, (int) Math.round(displayMetrics.heightPixels / 1.3724285), (int) Math.round(displayMetrics.widthPixels / 2.057), (int) Math.round(displayMetrics.heightPixels / 38.4));
-        candy = replaceColors(candy, 68, 105, 108, Color.WHITE, 200);
-        tesseract.setImage(candy);
-        //System.out.println(tesseract.getUTF8Text());
-        //SaveImage(candy, "candy");
-        try {
-            candyName = tesseract.getUTF8Text().trim().replace("-", " ").split(" ")[candyOrder].replace(" ", "").replace("1", "l").replace("0", "o");
-            candyName = new StringBuilder().append(candyName.substring(0, 1)).append(candyName.substring(1).toLowerCase()).toString();
-        }catch(StringIndexOutOfBoundsException e){
-            candyName = pokemonName; //Default for not finding candy name
-        }
-        Bitmap hp = Bitmap.createBitmap(pokemonImage, (int) Math.round(displayMetrics.widthPixels / 2.8), (int) Math.round(displayMetrics.heightPixels / 1.8962963), (int) Math.round(displayMetrics.widthPixels / 3.5), (int) Math.round(displayMetrics.heightPixels / 34.13333333));
-        hp = replaceColors(hp, 55, 66, 61, Color.WHITE, 200);
-        tesseract.setImage(hp);
-        //System.out.println(tesseract.getUTF8Text());
-        String pokemonHPStr = tesseract.getUTF8Text();
-
-        //Check if valid pokemon TODO find a better method of determining whether or not this is a pokemon image
-        if(pokemonHPStr.contains("/")) {
-            try {
-                pokemonHP = Integer.parseInt(pokemonHPStr.split("/")[1].replace("Z", "2").replace("O", "0").replace("l", "1").replaceAll("[^0-9]", ""));
-            } catch (java.lang.NumberFormatException e) {
-                pokemonHP = 10;
-            }
-
-            //SaveImage(hp, "hp");
-            Bitmap cp = Bitmap.createBitmap(pokemonImage, (int) Math.round(displayMetrics.widthPixels / 3.0), (int) Math.round(displayMetrics.heightPixels / 15.5151515), (int) Math.round(displayMetrics.widthPixels / 3.84), (int) Math.round(displayMetrics.heightPixels / 21.333333333));
-            cp = replaceColors(cp, 255, 255, 255, Color.BLACK, 30);
-            tesseract.setImage(cp);
-            //String cpText = tesseract.getUTF8Text().replace("O", "0").replace("l", "1").replace("S", "3").replaceAll("[^0-9]", "");
-            String cpText = tesseract.getUTF8Text().replace("O", "0").replace("l", "1");
-            cpText = cpText.substring(2);
-            if (cpText.length() > 4) {
-                cpText = cpText.substring(cpText.length() - 4, cpText.length() - 1);
-            }
-            //System.out.println(cpText);
-            try {
-                pokemonCP = Integer.parseInt(cpText);
-            } catch (java.lang.NumberFormatException e) {
-                pokemonCP = 10;
-            }
-
-            if (pokemonCP > 4500) {
-                cpText = cpText.substring(1);
-                pokemonCP = Integer.parseInt(cpText);
-            }
-            //SaveImage(cp, "cp");
-            //System.out.println("Name: " + pokemonName);
-            //System.out.println("HP: " + pokemonHP);
-            //System.out.println("CP: " + pokemonCP);
-            name.recycle();
-            candy.recycle();
-            cp.recycle();
-            hp.recycle();
 
             Intent info = new Intent("pokemon-info");
-            info.putExtra("name", pokemonName);
-            info.putExtra("candy", candyName);
-            info.putExtra("hp", pokemonHP);
-            info.putExtra("cp", pokemonCP);
-            info.putExtra("level", estimatedPokemonLevel);
+            info.putExtra("name", scanResult.pokemonName);
+            info.putExtra("candy", scanResult.candyName);
+            info.putExtra("hp", scanResult.pokemonHP);
+            info.putExtra("cp", scanResult.pokemonCP);
+            info.putExtra("level", scanResult.estimatedPokemonLevel);
             if (!filePath.isEmpty()) {
                 info.putExtra("screenshotDir", filePath);
             }
             LocalBroadcastManager.getInstance(MainActivity.this).sendBroadcast(info);
         }
-        else{
-            readyForNewScreenshot = true;
-        }
-    }
 
-    /**
-     * Dont missgender the poor nidorans.
-     *
-     * Takes a subportion of the screen, and averages the color to check the average values and compares to known male / female average
-     * @param pokemonImage The screenshot of the entire application
-     * @return True if the nidoran is female
-     */
-    private boolean isNidoranFemale(Bitmap pokemonImage) {
-        Bitmap pokemon = Bitmap.createBitmap(pokemonImage, displayMetrics.widthPixels / 3, (int) Math.round(displayMetrics.heightPixels / 4), (int) Math.round(displayMetrics.widthPixels / 3), (int) Math.round(displayMetrics.heightPixels / 5));
-        int[] pixelArray = new int[pokemon.getHeight() * pokemon.getWidth()];
-        pokemon.getPixels(pixelArray, 0, pokemon.getWidth(), 0, 0, pokemon.getWidth(), pokemon.getHeight());
-        int redSum =0;
-        int greenSum =0;
-        int blueSum=0;
-
-        // a loop that sums the color values of all the pixels in the image of the nidoran
-        for (int i=0; i<pixelArray.length; i++){
-            redSum += Color.red(pixelArray[i]);
-            blueSum += Color.green(pixelArray[i]);
-            greenSum += Color.blue(pixelArray[i]);
-        }
-        int redAverage = redSum/pixelArray.length;
-        int greenAverage = greenSum/pixelArray.length;
-        int blueAverage = blueSum/pixelArray.length;
-        //Average male nidoran has RGB value ~~ 136,165,117
-        //Average female nidoran has RGB value~ 135,190,140
-        int femaleGreenLimit = 175; //if average green is over 175, its probably female
-        int femaleBlueLimit = 130; //if average blue is over 130, its probably female
-        boolean isFemale = true;
-        if (greenAverage < femaleGreenLimit && blueAverage <femaleBlueLimit){
-            isFemale=false; //if neither average is above the female limit, then it's male.
-        }
-        return isFemale;
     }
 
     /**
@@ -695,53 +565,21 @@ public class MainActivity extends AppCompatActivity {
             int rowPadding = rowStride - pixelStride * rawDisplayMetrics.widthPixels;
             // create bitmap
             image.close();
-            Bitmap bmp = getBitmap(buffer, pixelStride, rowPadding);
+            Bitmap bmp = bmpHelper.getBitmap(buffer, pixelStride, rowPadding, rawDisplayMetrics.widthPixels, displayMetrics.heightPixels);
             Intent showIVButton = new Intent("display-ivButton");
-            if (bmp.getPixel(areaX1, areaY1) == Color.rgb(250, 250, 250) && bmp.getPixel(areaX2, areaY2) == Color.rgb(28, 135, 150)) {
+            if (bmp.getPixel(pokemonAreaX1, pokemonAreaY1) == Color.rgb(250, 250, 250) && bmp.getPixel(pokemonAreaX2, pokemonAreaY2) == Color.rgb(28, 135, 150)) {
                 showIVButton.putExtra("show", true);
+            } else if (bmp.getPixel(gymAreaX1, gymAreaY1) == Color.rgb(250, 250, 250) && bmp.getPixel(pokemonAreaX2, pokemonAreaY2) == Color.rgb(28, 135, 150)) {
             } else {
                 showIVButton.putExtra("show", false);
             }
             bmp.recycle();
             LocalBroadcastManager.getInstance(MainActivity.this).sendBroadcast(showIVButton);
-            //SaveImage(bmp,"everything");
+            //bmpHelper.saveImage(bmp,"everything");
         }
     }
 
-    @NonNull
-    private Bitmap getBitmap(ByteBuffer buffer, int pixelStride, int rowPadding) {
-        Bitmap bmp = Bitmap.createBitmap(rawDisplayMetrics.widthPixels + rowPadding / pixelStride, displayMetrics.heightPixels, Bitmap.Config.ARGB_8888);
-        bmp.copyPixelsFromBuffer(buffer);
-        return bmp;
-    }
 
-    /**
-     * SaveImage
-     * Used to save the image the screen capture is captuing, used for debugging.
-     *
-     * @param finalBitmap The bitmap to save
-     * @param name        The name of the file to save it as
-     */
-    private void SaveImage(Bitmap finalBitmap, String name) {
-
-        String root = Environment.getExternalStorageDirectory().toString();
-        File myDir = new File(root + "/saved_images");
-        myDir.mkdirs();
-        String fileName = "Image-" + name + ".jpg";
-        File file = new File(myDir, fileName);
-        if (file.exists()) file.delete();
-        try {
-            FileOutputStream out = new FileOutputStream(file);
-            finalBitmap.compress(Bitmap.CompressFormat.JPEG, 100, out);
-            out.flush();
-            out.close();
-
-        } catch (Exception e) {
-            Crashlytics.log("Exception thrown in saveImage()");
-            Crashlytics.logException(e);
-            Log.e(TAG, "Error while saving the image.", e);
-        }
-    }
 
     /**
      * startScreenService
@@ -815,35 +653,6 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
-    /**
-     * replaceColors
-     * Replaces colors in a bitmap that are not the same as a specific color.
-     *
-     * @param myBitmap     The bitmap to check the colors for.
-     * @param keepCr       The red color to keep
-     * @param keepCg       The green color to keep
-     * @param keepCb       The blue color to keep
-     * @param replaceColor The color to replace mismatched colors with
-     * @param similarity   The similarity buffer
-     * @return Bitmap with replaced colors
-     */
-    private Bitmap replaceColors(Bitmap myBitmap, int keepCr, int keepCg, int keepCb, int replaceColor, int similarity) {
-        int[] allpixels = new int[myBitmap.getHeight() * myBitmap.getWidth()];
-        myBitmap.getPixels(allpixels, 0, myBitmap.getWidth(), 0, 0, myBitmap.getWidth(), myBitmap.getHeight());
-
-        for (int i = 0; i < allpixels.length; i++) {
-            int r = Color.red(allpixels[i]);
-            int g = Color.green(allpixels[i]);
-            int b = Color.blue(allpixels[i]);
-            double d = Math.sqrt(Math.pow(keepCr - r, 2) + Math.pow(keepCg - g, 2) + Math.pow(keepCb - b, 2));
-            if (d > similarity) {
-                allpixels[i] = replaceColor;
-            }
-        }
-
-        myBitmap.setPixels(allpixels, 0, myBitmap.getWidth(), 0, 0, myBitmap.getWidth(), myBitmap.getHeight());
-        return myBitmap;
-    }
 
     private static boolean copyAssetFolder(AssetManager assetManager, String fromAssetPath, String toPath) {
 
